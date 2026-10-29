@@ -56,4 +56,14 @@ abstract class DchsFlutterBeaconPlatform extends PlatformInterface {
   Future<void> stopBroadcast();
   Future<bool> isBroadcasting();
   Future<bool> isBroadcastSupported();
+
+  /// Emits `true` when the device starts advertising and `false` when it
+  /// stops, including when the OS stops it (for example, Bluetooth turned off).
+  ///
+  /// Not abstract so platform implementations written before this stream
+  /// existed keep compiling.
+  Stream<bool> broadcastingStateChanged() {
+    throw UnimplementedError(
+        'broadcastingStateChanged() has not been implemented.');
+  }
 }

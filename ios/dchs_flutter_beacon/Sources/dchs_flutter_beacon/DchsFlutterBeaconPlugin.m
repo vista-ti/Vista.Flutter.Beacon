@@ -7,12 +7,22 @@
 #import "FBMonitoringStreamHandler.h"
 #import "FBAuthorizationStatusHandler.h"
 
+@class DchsFlutterBeaconPlugin;
+
+/// Streams broadcasting on/off transitions to Dart.
+@interface FBBroadcastStateHandler : NSObject<FlutterStreamHandler>
+@property (weak, nonatomic) DchsFlutterBeaconPlugin *plugin;
+@end
+
 @interface DchsFlutterBeaconPlugin() <CLLocationManagerDelegate, CBCentralManagerDelegate, CBPeripheralManagerDelegate>
 
 @property (assign, nonatomic) CLAuthorizationStatus defaultLocationAuthorizationType;
 @property (assign) BOOL shouldStartAdvertise;
 @property (assign) NSUInteger broadcastAttempt;
 @property (assign) NSUInteger pendingAdvertiseCallbacks;
+@property (assign) BOOL publishedBroadcastState;
+@property (copy, nonatomic, nullable) FlutterEventSink broadcastStateSink;
+@property (strong, nonatomic) FBBroadcastStateHandler *broadcastStateHandler;
 
 @property (strong, nonatomic) CLLocationManager *locationManager;
 @property (strong, nonatomic) CBCentralManager *bluetoothManager;
@@ -64,6 +74,13 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
     [FlutterEventChannel eventChannelWithName:@"flutter_authorization_status_changed"
                               binaryMessenger:[registrar messenger]];
     [streamChannelAuthorization setStreamHandler:instance.authorizationHandler];
+
+    instance.broadcastStateHandler = [[FBBroadcastStateHandler alloc] init];
+    instance.broadcastStateHandler.plugin = instance;
+    FlutterEventChannel* streamChannelBroadcastState =
+    [FlutterEventChannel eventChannelWithName:@"flutter_broadcast_state_changed"
+                              binaryMessenger:[registrar messenger]];
+    [streamChannelBroadcastState setStreamHandler:instance.broadcastStateHandler];
 }
 
 - (id)init {
@@ -258,6 +275,7 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
         if (self.peripheralManager) {
             [self.peripheralManager stopAdvertising];
         }
+        [self publishBroadcastState];
         result(nil);
         return;
     }
@@ -374,6 +392,7 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
         // A request that never answered must not swallow the next start's callback.
         strongSelf.pendingAdvertiseCallbacks = 0;
         [strongSelf failPendingBroadcastWithMessage:@"START_TIMEOUT"];
+        [strongSelf publishBroadcastState];
     });
 }
 
@@ -392,6 +411,18 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
     // Nothing can stop the advertisement once this engine is gone.
     [self failPendingBroadcastWithMessage:@"Flutter engine was detached before broadcasting started"];
     [self.peripheralManager stopAdvertising];
+    self.broadcastStateSink = nil;
+}
+
+- (void) publishBroadcastState {
+    BOOL state = self.peripheralManager.isAdvertising;
+    if (state == self.publishedBroadcastState) {
+        return;
+    }
+    self.publishedBroadcastState = state;
+    if (self.broadcastStateSink) {
+        self.broadcastStateSink(@(state));
+    }
 }
 
 ///------------------------------------------------------------
@@ -723,6 +754,10 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
 ///------------------------------------------------------------
 
 - (void)peripheralManagerDidUpdateState:(CBPeripheralManager *)peripheral {
+    // Core Bluetooth stops advertising on its own when it leaves the powered-on state.
+    if (peripheral.state != CBManagerStatePoweredOn) {
+        [self publishBroadcastState];
+    }
     if (self.shouldStartAdvertise && self.flutterBroadcastResult) {
         [self advertiseWhenPoweredOn:peripheral];
     }
@@ -753,8 +788,26 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
         // NSError is not encodable by the standard message codec; send its description only.
         pending([FlutterError errorWithCode:@"Broadcast" message:error.localizedDescription details:nil]);
     } else {
+        [self publishBroadcastState];
         pending(@(peripheral.isAdvertising));
     }
+}
+
+@end
+
+@implementation FBBroadcastStateHandler
+
+- (FlutterError * _Nullable)onListenWithArguments:(id _Nullable)arguments
+                                       eventSink:(FlutterEventSink)events {
+    DchsFlutterBeaconPlugin *plugin = self.plugin;
+    plugin.broadcastStateSink = events;
+    events(@(plugin.peripheralManager.isAdvertising));
+    return nil;
+}
+
+- (FlutterError * _Nullable)onCancelWithArguments:(id _Nullable)arguments {
+    self.plugin.broadcastStateSink = nil;
+    return nil;
 }
 
 @end

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:dchs_flutter_beacon/dchs_flutter_beacon.dart';
 import '/controller/requirement_state_controller.dart';
@@ -14,6 +16,7 @@ class TabBroadcastingState extends State<TabBroadcasting> {
   final controller = Get.find<RequirementStateController>();
   final clearFocus = FocusNode();
   bool broadcasting = false;
+  StreamSubscription<bool>? _broadcastingState;
 
   final regexUUID = RegExp(
       r'[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}');
@@ -36,6 +39,14 @@ class TabBroadcastingState extends State<TabBroadcasting> {
         // initBroadcastBeacon();
       }
     });
+
+    // Keeps the button in sync when the OS stops advertising (e.g. Bluetooth off).
+    _broadcastingState =
+        flutterBeacon.broadcastingStateChanged().listen((isBroadcasting) {
+      if (mounted) {
+        setState(() => broadcasting = isBroadcasting);
+      }
+    });
   }
 
   initBroadcastBeacon() async {
@@ -44,6 +55,7 @@ class TabBroadcastingState extends State<TabBroadcasting> {
 
   @override
   void dispose() {
+    _broadcastingState?.cancel();
     clearFocus.dispose();
     super.dispose();
   }

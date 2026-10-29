@@ -1,10 +1,14 @@
 package com.cavadalab.dchs_flutter_beacon
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
@@ -85,6 +89,8 @@ class FlutterBeaconBroadcast internal constructor(
     /** Returns an error code when this device cannot advertise right now, null otherwise. */
     private val transmissionError: () -> String?,
     private val schedule: (Long, () -> Unit) -> () -> Unit,
+    /** Calls back when Bluetooth turns off; returns a function that stops watching. */
+    watchBluetoothOff: (onOff: () -> Unit) -> () -> Unit,
 ) {
     constructor(context: Context, iBeaconLayout: BeaconParser) : this(
         BeaconAdvertiser { AltBeaconAdvertisement(context.applicationContext, iBeaconLayout) },
@@ -101,6 +107,7 @@ class FlutterBeaconBroadcast internal constructor(
             val cancel: () -> Unit = { handler.removeCallbacks(runnable) }
             cancel
         },
+        watchBluetoothOff = { onOff -> watchBluetoothOff(context.applicationContext, onOff) },
     )
 
     companion object {
@@ -119,6 +126,30 @@ class FlutterBeaconBroadcast internal constructor(
                 else -> null
             }
         }
+
+        private fun watchBluetoothOff(context: Context, onOff: () -> Unit): () -> Unit {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                    when (intent?.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
+                        BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> onOff()
+                    }
+                }
+            }
+            ContextCompat.registerReceiver(
+                context,
+                receiver,
+                IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            val stop: () -> Unit = {
+                try {
+                    context.unregisterReceiver(receiver)
+                } catch (e: IllegalArgumentException) {
+                    // Already unregistered.
+                }
+            }
+            return stop
+        }
     }
 
     private class PendingStart(val beacon: Beacon, val advertiseMode: Int?, val txPowerLevel: Int?)
@@ -126,20 +157,29 @@ class FlutterBeaconBroadcast internal constructor(
     /** Requests BLUETOOTH_ADVERTISE from the attached Activity; null while no Activity is attached. */
     var permissionRequester: (() -> Unit)? = null
 
+    /** Receives broadcasting on/off transitions; null while nobody listens. */
+    var stateListener: ((Boolean) -> Unit)? = null
+
+    val isAdvertising: Boolean
+        get() = advertisement?.isStarted == true
+
     private var advertisement: Advertisement? = null
     private var pendingResult: MethodChannel.Result? = null
     private var pendingStart: PendingStart? = null
     private var awaitingPermission = false
     private var cancelTimeout: (() -> Unit)? = null
     private var attempt = 0
+    private var publishedState = false
+    private val stopWatchingBluetooth = watchBluetoothOff { onBluetoothOff() }
 
     fun isBroadcasting(result: MethodChannel.Result) {
-        result.success(advertisement?.isStarted == true)
+        result.success(isAdvertising)
     }
 
     fun stopBroadcast(result: MethodChannel.Result) {
         finishWithError("Broadcast was stopped before it started")
         advertisement?.stop()
+        publishState()
         result.success(true)
     }
 
@@ -207,13 +247,31 @@ class FlutterBeaconBroadcast internal constructor(
     /** The engine is going away: nothing could stop the advertisement afterwards. */
     fun dispose() {
         permissionRequester = null
+        stopWatchingBluetooth()
         finishWithError("Flutter engine was detached before broadcasting started")
         advertisement?.stop()
+        stateListener = null
+    }
+
+    /** The OS stops advertising silently when Bluetooth turns off; AltBeacon still reports it started. */
+    private fun onBluetoothOff() {
+        finishWithError("BLUETOOTH_OFF")
+        advertisement?.stop()
+        publishState()
+    }
+
+    private fun publishState() {
+        val state = isAdvertising
+        if (state != publishedState) {
+            publishedState = state
+            stateListener?.invoke(state)
+        }
     }
 
     private fun startAdvertising() {
         val start = pendingStart ?: return
         advertisement?.stop()
+        publishState()
 
         val current = ++attempt
         val newAdvertisement = advertiser.create()
@@ -232,6 +290,7 @@ class FlutterBeaconBroadcast internal constructor(
                 return@start
             }
             if (errorCode == null) {
+                publishState()
                 finishWithSuccess()
             } else {
                 finishWithError(advertiseErrorName(errorCode))
