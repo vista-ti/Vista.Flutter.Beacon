@@ -255,6 +255,16 @@ if (await flutterBeacon.isBroadcastSupported()) {
 await flutterBeacon.stopBroadcast();
 ```
 
+`BeaconBroadcast` validates its arguments and throws an `ArgumentError` when:
+
+* `proximityUUID` is not a UUID in `8-4-4-4-12` hex format,
+* `major` or `minor` is outside `0..65535`,
+* `txPower` is outside `-128..127`,
+* `identifier` is null or empty on iOS.
+
+On Android, `advertisingMode` defaults to `AdvertisingMode.high` (shortest advertising
+interval, fastest detection). Pass `AdvertisingMode.low` to save battery.
+
 ## Under the hood
 
 * iOS uses native Framework [CoreLocation](https://developer.apple.com/documentation/corelocation/)
