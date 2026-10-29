@@ -2,6 +2,7 @@ package com.cavadalab.dchs_flutter_beacon
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import org.altbeacon.beacon.MonitorNotifier
@@ -42,5 +43,50 @@ internal class FlutterBeaconUtilsTest {
         )
 
         assertNull(region)
+    }
+
+    private val validBeacon = mapOf<String, Any?>(
+        "proximityUUID" to "CB10023F-A318-3394-4199-A8730C7C1AEC",
+        "major" to 65535,
+        "minor" to 0,
+        "txPower" to -128,
+    )
+
+    @Test
+    fun beaconFromMap_buildsIBeaconFromValidData() {
+        val beacon = FlutterBeaconUtils.beaconFromMap(validBeacon)
+
+        assertEquals("cb10023f-a318-3394-4199-a8730c7c1aec", beacon.id1.toString())
+        assertEquals("65535", beacon.id2.toString())
+        assertEquals("0", beacon.id3.toString())
+        assertEquals(-128, beacon.txPower)
+        assertEquals(0x004C, beacon.manufacturer)
+    }
+
+    @Test
+    fun beaconFromMap_defaultsTxPowerWhenMissing() {
+        val beacon = FlutterBeaconUtils.beaconFromMap(validBeacon - "txPower")
+
+        assertEquals(-59, beacon.txPower)
+    }
+
+    @Test
+    fun beaconFromMap_rejectsInvalidValues() {
+        val invalid = listOf(
+            validBeacon - "proximityUUID",
+            validBeacon + ("proximityUUID" to "123"),
+            validBeacon + ("proximityUUID" to "CB10023FA31833944199A8730C7C1AEC"),
+            validBeacon - "major",
+            validBeacon + ("major" to "1"),
+            validBeacon + ("major" to -1),
+            validBeacon + ("minor" to 65536),
+            validBeacon + ("txPower" to 128),
+            validBeacon + ("txPower" to "x"),
+        )
+        for (map in invalid) {
+            assertFailsWith<IllegalArgumentException>("expected rejection of $map") {
+                FlutterBeaconUtils.beaconFromMap(map)
+            }
+        }
     }
 }

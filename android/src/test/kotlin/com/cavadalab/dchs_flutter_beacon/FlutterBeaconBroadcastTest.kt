@@ -78,6 +78,7 @@ internal class FlutterBeaconBroadcastTest {
 
     private lateinit var advertiser: FakeAdvertiser
     private var needsPermission = false
+    private var supported = true
     private var timeoutAction: (() -> Unit)? = null
     private var timeoutCancelled = false
     private var permissionRequests = 0
@@ -94,12 +95,14 @@ internal class FlutterBeaconBroadcastTest {
     fun setUp() {
         advertiser = FakeAdvertiser()
         needsPermission = false
+        supported = true
         timeoutAction = null
         timeoutCancelled = false
         permissionRequests = 0
         broadcast = FlutterBeaconBroadcast(
             advertiser,
             needsAdvertisePermission = { needsPermission },
+            transmissionError = { if (supported) null else "BROADCAST_NOT_SUPPORTED" },
             schedule = { _, action ->
                 timeoutAction = action
                 val cancel: () -> Unit = { timeoutCancelled = true }
@@ -385,6 +388,25 @@ internal class FlutterBeaconBroadcastTest {
 
         assertEquals("ALREADY_STARTED", restart.errorMessage)
         assertEquals(0, advertiser.liveCount)
+    }
+
+    // Gap #8: unsupported hardware fails fast
+
+    @Test
+    fun start_failsWhenTransmissionUnsupported() {
+        supported = false
+        val result = RecordingResult()
+        broadcast.startBroadcast(args, result)
+
+        assertEquals("BROADCAST_NOT_SUPPORTED", result.errorMessage)
+        assertEquals(0, advertiser.startCalls)
+        assertEquals(0, permissionRequests)
+
+        supported = true
+        val next = RecordingResult()
+        broadcast.startBroadcast(args, next)
+        advertiser.succeed()
+        assertTrue(next.succeeded)
     }
 
     @Test
