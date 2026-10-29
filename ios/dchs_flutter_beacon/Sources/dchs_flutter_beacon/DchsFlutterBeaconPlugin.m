@@ -12,6 +12,7 @@
 @property (assign, nonatomic) CLAuthorizationStatus defaultLocationAuthorizationType;
 @property (assign) BOOL shouldStartAdvertise;
 @property (assign) NSUInteger broadcastAttempt;
+@property (assign) NSUInteger pendingAdvertiseCallbacks;
 
 @property (strong, nonatomic) CLLocationManager *locationManager;
 @property (strong, nonatomic) CBCentralManager *bluetoothManager;
@@ -338,6 +339,7 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
             if (peripheral.isAdvertising) {
                 [peripheral stopAdvertising];
             }
+            self.pendingAdvertiseCallbacks++;
             [peripheral startAdvertising:self.beaconPeripheralData];
             [self scheduleBroadcastStartTimeout];
             break;
@@ -369,11 +371,15 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
             return;
         }
         [strongSelf.peripheralManager stopAdvertising];
+        // A request that never answered must not swallow the next start's callback.
+        strongSelf.pendingAdvertiseCallbacks = 0;
         [strongSelf failPendingBroadcastWithMessage:@"START_TIMEOUT"];
     });
 }
 
 - (void) failPendingBroadcastWithMessage:(NSString *)message {
+    // Any armed start timeout now belongs to no call.
+    self.broadcastAttempt++;
     self.shouldStartAdvertise = NO;
     FlutterResult pending = self.flutterBroadcastResult;
     self.flutterBroadcastResult = nil;
@@ -723,6 +729,15 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
 }
 
 - (void)peripheralManagerDidStartAdvertising:(CBPeripheralManager *)peripheral error:(nullable NSError *)error {
+    // One manager serves every start, so callbacks carry no attempt id: only the
+    // answer to the latest startAdvertising request may settle the pending call.
+    if (self.pendingAdvertiseCallbacks > 0) {
+        self.pendingAdvertiseCallbacks--;
+    }
+    if (self.pendingAdvertiseCallbacks > 0) {
+        return;
+    }
+
     FlutterResult pending = self.flutterBroadcastResult;
     if (!pending) {
         // Answered after a timeout, stop or detach: never leave it advertising unowned.
@@ -732,6 +747,7 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
         return;
     }
     self.flutterBroadcastResult = nil;
+    self.broadcastAttempt++;
 
     if (error) {
         // NSError is not encodable by the standard message codec; send its description only.
