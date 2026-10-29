@@ -6,6 +6,10 @@
 * Android: `startBroadcast()` always completes: it fails when the Activity detaches during the `BLUETOOTH_ADVERTISE` prompt, rejects a second call while one is pending (`ALREADY_STARTING`), and times out after 10 seconds (`START_TIMEOUT`) if the radio never answers.
 * Android: calling `startBroadcast()` while already broadcasting restarts the advertisement with the new data instead of failing with `ALREADY_STARTED`.
 * Android: `stopBroadcast()` and `isBroadcasting()` no longer require an attached Activity; `startBroadcast()` only needs one to request `BLUETOOTH_ADVERTISE`.
+* iOS: `startBroadcast()` no longer hangs when Bluetooth is off, unauthorized or unsupported: it fails with `BLUETOOTH_OFF`, `BLUETOOTH_UNAUTHORIZED` or `BLUETOOTH_UNSUPPORTED`, and times out after 10 seconds (`START_TIMEOUT`) once advertising was requested.
+* iOS: invalid beacon data (malformed UUID, `major`/`minor` outside `0..65535`, missing identifier) returns an error instead of crashing; ranging and monitoring skip such regions instead of crashing.
+* iOS: one `CBPeripheralManager` is reused across starts, a second start while one is pending fails with `ALREADY_STARTING`, and the advertisement stops when the plugin detaches from the engine.
+* iOS: replace the deprecated `CLBeaconRegion initWithProximityUUID:` initializers with `initWithUUID:`; `isBroadcastSupported` reports `false` when Core Bluetooth reports the hardware as unsupported.
 
 ## [0.6.10]
 * Add Swift Package Manager support for iOS while retaining CocoaPods compatibility.
