@@ -1,5 +1,5 @@
 
-## [Unreleased]
+## [0.7.0]
 * `BeaconBroadcast` now validates its arguments in release builds (previously `assert`-only): UUID format, `major`/`minor` in `0..65535`, `txPower` in `-128..127`, and a non-empty `identifier` on iOS. Invalid values throw `ArgumentError`.
 * **Behavior change:** `advertisingMode` now defaults to `AdvertisingMode.high` instead of `AdvertisingMode.low` for faster detection on Android.
 * Android: the broadcast is now owned by the Flutter engine instead of the Activity. Activity recreation no longer leaves an advertisement that `stopBroadcast()` cannot stop, and detaching the engine stops the advertisement.
