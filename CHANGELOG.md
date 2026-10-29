@@ -1,4 +1,8 @@
 
+## [Unreleased]
+* `BeaconBroadcast` now validates its arguments in release builds (previously `assert`-only): UUID format, `major`/`minor` in `0..65535`, `txPower` in `-128..127`, and a non-empty `identifier` on iOS. Invalid values throw `ArgumentError`.
+* **Behavior change:** `advertisingMode` now defaults to `AdvertisingMode.high` instead of `AdvertisingMode.low` for faster detection on Android.
+
 ## [0.6.10]
 * Add Swift Package Manager support for iOS while retaining CocoaPods compatibility.
 * Handle Android-only scan period and tracking-cache settings as successful no-ops on iOS so they remain safe in cross-platform code.
