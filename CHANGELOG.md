@@ -2,6 +2,10 @@
 ## [Unreleased]
 * `BeaconBroadcast` now validates its arguments in release builds (previously `assert`-only): UUID format, `major`/`minor` in `0..65535`, `txPower` in `-128..127`, and a non-empty `identifier` on iOS. Invalid values throw `ArgumentError`.
 * **Behavior change:** `advertisingMode` now defaults to `AdvertisingMode.high` instead of `AdvertisingMode.low` for faster detection on Android.
+* Android: the broadcast is now owned by the Flutter engine instead of the Activity. Activity recreation no longer leaves an advertisement that `stopBroadcast()` cannot stop, and detaching the engine stops the advertisement.
+* Android: `startBroadcast()` always completes: it fails when the Activity detaches during the `BLUETOOTH_ADVERTISE` prompt, rejects a second call while one is pending (`ALREADY_STARTING`), and times out after 10 seconds (`START_TIMEOUT`) if the radio never answers.
+* Android: calling `startBroadcast()` while already broadcasting restarts the advertisement with the new data instead of failing with `ALREADY_STARTED`.
+* Android: `stopBroadcast()` and `isBroadcasting()` no longer require an attached Activity; `startBroadcast()` only needs one to request `BLUETOOTH_ADVERTISE`.
 
 ## [0.6.10]
 * Add Swift Package Manager support for iOS while retaining CocoaPods compatibility.

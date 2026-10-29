@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.RemoteException
 import androidx.annotation.NonNull
+import androidx.core.app.ActivityCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -50,6 +51,8 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
     }
 
     override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
+        // Nothing can stop the advertisement once this engine is gone.
+        beaconBroadcast?.dispose()
         stopBeaconSession()
         teardownChannels()
         clearActivityScopedReferences()
@@ -64,8 +67,14 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
         activityPluginBinding?.addRequestPermissionsResultListener(this)
         platform?.setActivity(binding.activity)
 
-        val iBeaconLayout = BeaconParser().setBeaconLayout("m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24")
-        beaconBroadcast = FlutterBeaconBroadcast(binding.activity, iBeaconLayout)
+        val activity = binding.activity
+        beaconBroadcast?.permissionRequester = {
+            ActivityCompat.requestPermissions(
+                activity,
+                arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE),
+                FlutterBeaconBroadcast.REQUEST_CODE_BLUETOOTH_ADVERTISE
+            )
+        }
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
@@ -86,7 +95,7 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
         activityPluginBinding?.removeRequestPermissionsResultListener(this)
         activityPluginBinding = null
         platform?.setActivity(null)
-        beaconBroadcast = null
+        beaconBroadcast?.onActivityDetached()
         this.activity = null
     }
 
@@ -101,6 +110,7 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
         }
 
         platform = FlutterPlatform(appContext, activity)
+        beaconBroadcast = FlutterBeaconBroadcast(appContext, iBeaconLayout)
         beaconScanner = FlutterBeaconScanner(this, appContext)
         channel = MethodChannel(messenger, "flutter_beacon")
         channel.setMethodCallHandler(this)
@@ -289,7 +299,7 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
             "startBroadcast" -> {
                 val broadcast = beaconBroadcast
                 if (broadcast == null) {
-                    result.error("Beacon", "Activity is required for beacon broadcasting", null)
+                    result.error("Beacon", "Plugin is not attached to a Flutter engine", null)
                     return
                 }
                 broadcast.startBroadcast(call.arguments, result)
@@ -297,7 +307,7 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
             "stopBroadcast" -> {
                 val broadcast = beaconBroadcast
                 if (broadcast == null) {
-                    result.error("Beacon", "Activity is required for beacon broadcasting", null)
+                    result.error("Beacon", "Plugin is not attached to a Flutter engine", null)
                     return
                 }
                 broadcast.stopBroadcast(result)
@@ -305,7 +315,7 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
             "isBroadcasting" -> {
                 val broadcast = beaconBroadcast
                 if (broadcast == null) {
-                    result.error("Beacon", "Activity is required for beacon broadcasting", null)
+                    result.error("Beacon", "Plugin is not attached to a Flutter engine", null)
                     return
                 }
                 broadcast.isBroadcasting(result)
@@ -371,11 +381,7 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
             val advertisingAllowed = grantResults.isNotEmpty() &&
                 grantResults.all { it == PackageManager.PERMISSION_GRANTED }
 
-            if (advertisingAllowed) {
-                beaconBroadcast?.startAdvertisingAfterPermissionGranted()
-            } else {
-                beaconBroadcast?.onAdvertisingPermissionDenied()
-            }
+            beaconBroadcast?.onAdvertisePermissionResult(advertisingAllowed)
             return true
         }
 
