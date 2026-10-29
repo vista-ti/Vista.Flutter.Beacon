@@ -768,8 +768,11 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
 ///------------------------------------------------------------
 
 - (void)peripheralManagerDidUpdateState:(CBPeripheralManager *)peripheral {
-    // Core Bluetooth stops advertising on its own when it leaves the powered-on state.
+    // Core Bluetooth stops advertising on its own when it leaves the powered-on state,
+    // and drops any unanswered startAdvertising request with it.
     if (peripheral.state != CBManagerStatePoweredOn) {
+        self.advertiseRequestInFlight = NO;
+        self.advertiseRequestQueued = NO;
         [self publishBroadcastState];
     }
     if (self.shouldStartAdvertise && self.flutterBroadcastResult) {
