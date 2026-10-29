@@ -11,6 +11,7 @@
 
 @property (assign, nonatomic) CLAuthorizationStatus defaultLocationAuthorizationType;
 @property (assign) BOOL shouldStartAdvertise;
+@property (assign) NSUInteger broadcastAttempt;
 
 @property (strong, nonatomic) CLLocationManager *locationManager;
 @property (strong, nonatomic) CBCentralManager *bluetoothManager;
@@ -29,6 +30,8 @@
 @property FlutterResult flutterBroadcastResult;
 
 @end
+
+static const NSTimeInterval kBroadcastStartTimeout = 10.0;
 
 @implementation DchsFlutterBeaconPlugin
 + (void)registerWithRegistrar:(NSObject<FlutterPluginRegistrar>*)registrar {
@@ -245,12 +248,12 @@
     }
     
     if ([@"startBroadcast" isEqualToString:call.method]) {
-        self.flutterBroadcastResult = result;
-        [self startBroadcast:call.arguments];
+        [self startBroadcast:call.arguments result:result];
         return;
     }
     
     if ([@"stopBroadcast" isEqualToString:call.method]) {
+        [self failPendingBroadcastWithMessage:@"Broadcast was stopped before it started"];
         if (self.peripheralManager) {
             [self.peripheralManager stopAdvertising];
         }
@@ -268,7 +271,10 @@
     }
     
     if ([@"isBroadcastSupported" isEqualToString:call.method]) {
-        result(@(YES));
+        // Only an existing manager knows the hardware state; creating one here
+        // would trigger the Bluetooth permission prompt.
+        BOOL unsupported = self.peripheralManager && self.peripheralManager.state == CBManagerStateUnsupported;
+        result(@(!unsupported));
         return;
     }
     
@@ -290,17 +296,96 @@
     }
 }
 
-- (void) startBroadcast:(id)arguments {
+- (void) startBroadcast:(id)arguments result:(FlutterResult)result {
+    if (self.flutterBroadcastResult) {
+        result([FlutterError errorWithCode:@"Broadcast" message:@"ALREADY_STARTING" details:nil]);
+        return;
+    }
+    if (![arguments isKindOfClass:[NSDictionary class]]) {
+        result([FlutterError errorWithCode:@"Broadcast" message:@"Invalid parameter" details:nil]);
+        return;
+    }
+
     NSDictionary *dict = arguments;
+    CLBeaconRegion *region = [FBUtils regionFromDictionary:dict];
+    if (!region) {
+        result([FlutterError errorWithCode:@"Broadcast"
+                                   message:@"Invalid beacon: proximityUUID must be a UUID, major/minor in 0..65535 and identifier set"
+                                   details:nil]);
+        return;
+    }
     NSNumber *measuredPower = nil;
-    if (dict[@"txPower"] != [NSNull null]) {
+    if ([dict[@"txPower"] isKindOfClass:[NSNumber class]]) {
         measuredPower = dict[@"txPower"];
     }
-    CLBeaconRegion *region = [FBUtils regionFromDictionary:dict];
-    
-    self.shouldStartAdvertise = YES;
+
+    self.flutterBroadcastResult = result;
     self.beaconPeripheralData = [region peripheralDataWithMeasuredPower:measuredPower];
-    self.peripheralManager = [[CBPeripheralManager alloc] initWithDelegate:self queue:nil];
+
+    // Reuse one manager: a new one per start leaked the previous advertisement.
+    if (!self.peripheralManager) {
+        self.shouldStartAdvertise = YES;
+        self.peripheralManager = [[CBPeripheralManager alloc] initWithDelegate:self queue:nil];
+        return;
+    }
+    [self advertiseWhenPoweredOn:self.peripheralManager];
+}
+
+- (void) advertiseWhenPoweredOn:(CBPeripheralManager *)peripheral {
+    switch (peripheral.state) {
+        case CBManagerStatePoweredOn:
+            self.shouldStartAdvertise = NO;
+            if (peripheral.isAdvertising) {
+                [peripheral stopAdvertising];
+            }
+            [peripheral startAdvertising:self.beaconPeripheralData];
+            [self scheduleBroadcastStartTimeout];
+            break;
+        case CBManagerStatePoweredOff:
+            [self failPendingBroadcastWithMessage:@"BLUETOOTH_OFF"];
+            break;
+        case CBManagerStateUnauthorized:
+            [self failPendingBroadcastWithMessage:@"BLUETOOTH_UNAUTHORIZED"];
+            break;
+        case CBManagerStateUnsupported:
+            [self failPendingBroadcastWithMessage:@"BLUETOOTH_UNSUPPORTED"];
+            break;
+        default:
+            // Unknown or resetting: wait for the next state update; the start timeout is the backstop.
+            self.shouldStartAdvertise = YES;
+            break;
+    }
+}
+
+// Starts only once the radio is asked to advertise, so time spent in the
+// Bluetooth permission prompt never counts against it.
+- (void) scheduleBroadcastStartTimeout {
+    NSUInteger attempt = ++self.broadcastAttempt;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kBroadcastStartTimeout * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        DchsFlutterBeaconPlugin *strongSelf = weakSelf;
+        if (!strongSelf || attempt != strongSelf.broadcastAttempt || !strongSelf.flutterBroadcastResult) {
+            return;
+        }
+        [strongSelf.peripheralManager stopAdvertising];
+        [strongSelf failPendingBroadcastWithMessage:@"START_TIMEOUT"];
+    });
+}
+
+- (void) failPendingBroadcastWithMessage:(NSString *)message {
+    self.shouldStartAdvertise = NO;
+    FlutterResult pending = self.flutterBroadcastResult;
+    self.flutterBroadcastResult = nil;
+    if (pending) {
+        pending([FlutterError errorWithCode:@"Broadcast" message:message details:nil]);
+    }
+}
+
+- (void)detachFromEngineForRegistrar:(NSObject<FlutterPluginRegistrar>*)registrar {
+    // Nothing can stop the advertisement once this engine is gone.
+    [self failPendingBroadcastWithMessage:@"Flutter engine was detached before broadcasting started"];
+    [self.peripheralManager stopAdvertising];
 }
 
 ///------------------------------------------------------------
@@ -632,29 +717,28 @@
 ///------------------------------------------------------------
 
 - (void)peripheralManagerDidUpdateState:(CBPeripheralManager *)peripheral {
-    switch (peripheral.state) {
-        case CBPeripheralManagerStatePoweredOn:
-            if (self.shouldStartAdvertise) {
-                [peripheral startAdvertising:self.beaconPeripheralData];
-                self.shouldStartAdvertise = NO;
-            }
-            break;
-        default:
-            break;
+    if (self.shouldStartAdvertise && self.flutterBroadcastResult) {
+        [self advertiseWhenPoweredOn:peripheral];
     }
 }
 
 - (void)peripheralManagerDidStartAdvertising:(CBPeripheralManager *)peripheral error:(nullable NSError *)error {
-    if (!self.flutterBroadcastResult) {
+    FlutterResult pending = self.flutterBroadcastResult;
+    if (!pending) {
+        // Answered after a timeout, stop or detach: never leave it advertising unowned.
+        if (!error) {
+            [peripheral stopAdvertising];
+        }
         return;
     }
-    
-    if (error) {
-        self.flutterBroadcastResult([FlutterError errorWithCode:@"Broadcast" message:error.localizedDescription details:error]);
-    } else {
-        self.flutterBroadcastResult(@(peripheral.isAdvertising));
-    }
     self.flutterBroadcastResult = nil;
+
+    if (error) {
+        // NSError is not encodable by the standard message codec; send its description only.
+        pending([FlutterError errorWithCode:@"Broadcast" message:error.localizedDescription details:nil]);
+    } else {
+        pending(@(peripheral.isAdvertising));
+    }
 }
 
 @end

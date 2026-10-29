@@ -57,21 +57,41 @@
 }
 
 + (CLBeaconRegion * _Nullable) regionFromDictionary:(NSDictionary*) dict {
-    NSString *identifier = dict[@"identifier"];
-    NSString *proximityUUID = dict[@"proximityUUID"];
-    NSNumber *major = dict[@"major"];
-    NSNumber *minor = dict[@"minor"];
-    
-    CLBeaconRegion *region = nil;
-    if (proximityUUID && major && minor) {
-        region = [[CLBeaconRegion alloc] initWithProximityUUID:[[NSUUID alloc] initWithUUIDString:proximityUUID] major:[major intValue] minor:[minor intValue] identifier:identifier];
-    } else if (proximityUUID && major) {
-        region = [[CLBeaconRegion alloc] initWithProximityUUID:[[NSUUID alloc] initWithUUIDString:proximityUUID] major:[major intValue] identifier:identifier];
-    } else if (proximityUUID) {
-        region = [[CLBeaconRegion alloc] initWithProximityUUID:[[NSUUID alloc] initWithUUIDString:proximityUUID] identifier:identifier];
+    // Values come from Dart: reject wrong types, NSNull, malformed UUIDs and
+    // out-of-range ids instead of passing nil/garbage to CLBeaconRegion (which crashes).
+    id identifier = dict[@"identifier"];
+    id proximityUUID = dict[@"proximityUUID"];
+    id major = dict[@"major"];
+    id minor = dict[@"minor"];
+
+    if (![identifier isKindOfClass:[NSString class]] || ![proximityUUID isKindOfClass:[NSString class]]) {
+        return nil;
     }
-    
+    NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:proximityUUID];
+    if (!uuid) {
+        return nil;
+    }
+    BOOL hasMajor = [major isKindOfClass:[NSNumber class]];
+    BOOL hasMinor = [minor isKindOfClass:[NSNumber class]];
+    if ((hasMajor && ![self isBeaconIdValue:major]) || (hasMinor && ![self isBeaconIdValue:minor])) {
+        return nil;
+    }
+
+    CLBeaconRegion *region = nil;
+    if (hasMajor && hasMinor) {
+        region = [[CLBeaconRegion alloc] initWithUUID:uuid major:[major unsignedShortValue] minor:[minor unsignedShortValue] identifier:identifier];
+    } else if (hasMajor) {
+        region = [[CLBeaconRegion alloc] initWithUUID:uuid major:[major unsignedShortValue] identifier:identifier];
+    } else {
+        region = [[CLBeaconRegion alloc] initWithUUID:uuid identifier:identifier];
+    }
+
     return region;
+}
+
++ (BOOL) isBeaconIdValue:(NSNumber*) value {
+    long long number = [value longLongValue];
+    return number >= 0 && number <= UINT16_MAX;
 }
 
 @end
