@@ -131,7 +131,12 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
         eventChannelBroadcastState = EventChannel(messenger, "flutter_broadcast_state_changed")
         eventChannelBroadcastState.setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
-                val broadcast = beaconBroadcast ?: return
+                val broadcast = beaconBroadcast
+                if (broadcast == null) {
+                    // Keep the documented "current state first" contract.
+                    events.success(false)
+                    return
+                }
                 broadcast.stateListener = { events.success(it) }
                 events.success(broadcast.isAdvertising)
             }

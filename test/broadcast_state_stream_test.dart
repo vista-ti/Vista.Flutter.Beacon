@@ -27,12 +27,34 @@ void main() {
       MockStreamHandler.inline(onListen: (arguments, events) {
         events.success(true);
         events.success(false);
-        events.endOfStream();
       }),
     );
 
-    expect(await flutterBeacon.broadcastingStateChanged().toList(),
+    expect(await flutterBeacon.broadcastingStateChanged().take(2).toList(),
         [true, false]);
+  });
+
+  test('broadcastingStateChanged maps non-true events to false', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(
+      channel,
+      MockStreamHandler.inline(onListen: (arguments, events) {
+        events.success(null);
+        events.success(1);
+        events.success(true);
+      }),
+    );
+
+    expect(await flutterBeacon.broadcastingStateChanged().take(3).toList(),
+        [false, false, true]);
+  });
+
+  test('broadcastingStateChanged returns the same cached stream', () {
+    expect(
+      identical(flutterBeacon.broadcastingStateChanged(),
+          flutterBeacon.broadcastingStateChanged()),
+      isTrue,
+    );
   });
 
   test('platform implementations that predate the stream still compile and '
