@@ -84,35 +84,34 @@ object FlutterBeaconUtils {
         }
     }
 
-    @Suppress("UNCHECKED_CAST")
-    fun beaconFromMap(map: Map<*, *>): Beacon {
-        val builder = Beacon.Builder()
+    private val UUID_PATTERN =
+        Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
+    /**
+     * Builds the iBeacon to advertise. Throws [IllegalArgumentException] for missing or
+     * out-of-range values instead of silently advertising a malformed beacon.
+     */
+    fun beaconFromMap(map: Map<*, *>): Beacon {
         val proximityUUID = map["proximityUUID"]
-        if (proximityUUID is String) {
-            builder.setId1(proximityUUID)
+        require(proximityUUID is String && UUID_PATTERN.matches(proximityUUID)) {
+            "proximityUUID must be a UUID (8-4-4-4-12 hex)"
         }
         val major = map["major"]
-        if (major is Int) {
-            builder.setId2(major.toString())
-        }
+        require(major is Int && major in 0..65535) { "major must be an integer in 0..65535" }
         val minor = map["minor"]
-        if (minor is Int) {
-            builder.setId3(minor.toString())
-        }
-
+        require(minor is Int && minor in 0..65535) { "minor must be an integer in 0..65535" }
         val txPower = map["txPower"]
-        if (txPower is Int) {
-            builder.setTxPower(txPower)
-        } else {
-            builder.setTxPower(-59)
+        require(txPower == null || (txPower is Int && txPower in -128..127)) {
+            "txPower must be an integer in -128..127"
         }
 
-        builder.setDataFields(listOf(0L))
-        builder.setManufacturer(0x004C) // Apple Inc.
-
-        //builder.manufacturer = 0x004C // Apple Inc.
-
-        return builder.build()
+        return Beacon.Builder()
+            .setId1(proximityUUID)
+            .setId2(major.toString())
+            .setId3(minor.toString())
+            .setTxPower((txPower as Int?) ?: -59)
+            .setDataFields(listOf(0L))
+            .setManufacturer(0x004C) // Apple Inc.
+            .build()
     }
 }

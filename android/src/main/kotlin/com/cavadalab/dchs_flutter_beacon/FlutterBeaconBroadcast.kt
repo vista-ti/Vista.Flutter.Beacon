@@ -1,6 +1,7 @@
 package com.cavadalab.dchs_flutter_beacon
 
 import android.Manifest
+import android.bluetooth.BluetoothManager
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseSettings
 import android.content.Context
@@ -81,6 +82,8 @@ private class AltBeaconAdvertisement(
 class FlutterBeaconBroadcast internal constructor(
     private val advertiser: BeaconAdvertiser,
     private val needsAdvertisePermission: () -> Boolean,
+    /** Returns an error code when this device cannot advertise right now, null otherwise. */
+    private val transmissionError: () -> String?,
     private val schedule: (Long, () -> Unit) -> () -> Unit,
 ) {
     constructor(context: Context, iBeaconLayout: BeaconParser) : this(
@@ -90,6 +93,7 @@ class FlutterBeaconBroadcast internal constructor(
                 ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_ADVERTISE) !=
                 PackageManager.PERMISSION_GRANTED
         },
+        transmissionError = { transmissionError(context.applicationContext) },
         schedule = { delayMs, action ->
             val handler = Handler(Looper.getMainLooper())
             val runnable = Runnable(action)
@@ -102,6 +106,19 @@ class FlutterBeaconBroadcast internal constructor(
     companion object {
         const val REQUEST_CODE_BLUETOOTH_ADVERTISE = 1236
         const val START_TIMEOUT_MS = 10_000L
+
+        private fun transmissionError(context: Context): String? {
+            val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+            return when {
+                adapter == null || !context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE) ->
+                    "BROADCAST_NOT_SUPPORTED"
+                // AltBeacon reports "not supported" while Bluetooth is merely off; tell them apart.
+                !adapter.isEnabled -> "BLUETOOTH_OFF"
+                BeaconTransmitter.checkTransmissionSupported(context) != BeaconTransmitter.SUPPORTED ->
+                    "BROADCAST_NOT_SUPPORTED"
+                else -> null
+            }
+        }
     }
 
     private class PendingStart(val beacon: Beacon, val advertiseMode: Int?, val txPowerLevel: Int?)
@@ -133,6 +150,10 @@ class FlutterBeaconBroadcast internal constructor(
         }
         if (pendingResult != null) {
             result.error("Broadcast", "ALREADY_STARTING", null)
+            return
+        }
+        transmissionError()?.let { error ->
+            result.error("Broadcast", error, null)
             return
         }
 
