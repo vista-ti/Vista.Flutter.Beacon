@@ -82,6 +82,9 @@ internal class FlutterBeaconBroadcastTest {
     private var timeoutAction: (() -> Unit)? = null
     private var timeoutCancelled = false
     private var permissionRequests = 0
+    private var bluetoothOff: (() -> Unit)? = null
+    private var bluetoothWatchStopped = false
+    private val states = mutableListOf<Boolean>()
     private lateinit var broadcast: FlutterBeaconBroadcast
 
     private val args = mapOf<String, Any?>(
@@ -99,6 +102,9 @@ internal class FlutterBeaconBroadcastTest {
         timeoutAction = null
         timeoutCancelled = false
         permissionRequests = 0
+        bluetoothOff = null
+        bluetoothWatchStopped = false
+        states.clear()
         broadcast = FlutterBeaconBroadcast(
             advertiser,
             needsAdvertisePermission = { needsPermission },
@@ -108,8 +114,14 @@ internal class FlutterBeaconBroadcastTest {
                 val cancel: () -> Unit = { timeoutCancelled = true }
                 cancel
             },
+            watchBluetoothOff = { onOff ->
+                bluetoothOff = onOff
+                val stop: () -> Unit = { bluetoothWatchStopped = true }
+                stop
+            },
         )
         broadcast.permissionRequester = { permissionRequests++ }
+        broadcast.stateListener = { states += it }
     }
 
     // Existing behavior
@@ -407,6 +419,62 @@ internal class FlutterBeaconBroadcastTest {
         broadcast.startBroadcast(args, next)
         advertiser.succeed()
         assertTrue(next.succeeded)
+    }
+
+    // Gap #9: broadcasting state stream
+
+    @Test
+    fun state_emitsTrueOnStartAndFalseOnStop() {
+        broadcast.startBroadcast(args, RecordingResult())
+        assertEquals(emptyList(), states, "nothing on air until the radio confirms")
+        advertiser.succeed()
+        broadcast.stopBroadcast(RecordingResult())
+
+        assertEquals(listOf(true, false), states)
+        assertFalse(broadcast.isAdvertising)
+    }
+
+    @Test
+    fun state_reportsRestartTransitions() {
+        broadcast.startBroadcast(args, RecordingResult())
+        advertiser.succeed()
+        broadcast.startBroadcast(args + ("major" to 5), RecordingResult())
+        advertiser.succeed()
+
+        assertEquals(listOf(true, false, true), states)
+    }
+
+    @Test
+    fun bluetoothOff_whileAdvertising_stopsAndEmitsFalse() {
+        broadcast.startBroadcast(args, RecordingResult())
+        advertiser.succeed()
+
+        bluetoothOff!!.invoke()
+
+        assertEquals(listOf(true, false), states)
+        assertFalse(advertiser.isStarted)
+        val isBroadcasting = RecordingResult()
+        broadcast.isBroadcasting(isBroadcasting)
+        assertEquals(false, isBroadcasting.successValue)
+    }
+
+    @Test
+    fun bluetoothOff_whileStarting_failsPendingStart() {
+        val result = RecordingResult()
+        broadcast.startBroadcast(args, result)
+
+        bluetoothOff!!.invoke()
+
+        assertEquals("BLUETOOTH_OFF", result.errorMessage)
+        advertiser.succeed()
+        assertFalse(advertiser.isStarted, "late success after Bluetooth off must be stopped")
+    }
+
+    @Test
+    fun dispose_stopsWatchingBluetooth() {
+        broadcast.dispose()
+
+        assertTrue(bluetoothWatchStopped)
     }
 
     @Test

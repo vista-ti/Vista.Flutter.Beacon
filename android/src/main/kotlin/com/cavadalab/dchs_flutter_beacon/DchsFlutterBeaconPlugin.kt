@@ -35,6 +35,8 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
     private lateinit var eventChannelMonitoring: EventChannel
     private lateinit var eventChannelBluetoothState: EventChannel
     private lateinit var eventChannelAuthorizationStatus: EventChannel
+    private lateinit var eventChannelBroadcastState: EventChannel
+    private var broadcastStateSink: EventChannel.EventSink? = null
 
     private var beaconManager: BeaconManager? = null
     private var beaconScanner: FlutterBeaconScanner? = null
@@ -110,7 +112,10 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
         }
 
         platform = FlutterPlatform(appContext, activity)
-        beaconBroadcast = FlutterBeaconBroadcast(appContext, iBeaconLayout)
+        beaconBroadcast = FlutterBeaconBroadcast(appContext, iBeaconLayout).also { broadcast ->
+            // Forward through the plugin so a subscription never depends on which instance existed at listen time.
+            broadcast.stateListener = { broadcastStateSink?.success(it) }
+        }
         beaconScanner = FlutterBeaconScanner(this, appContext)
         channel = MethodChannel(messenger, "flutter_beacon")
         channel.setMethodCallHandler(this)
@@ -126,6 +131,19 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
 
         eventChannelAuthorizationStatus = EventChannel(messenger, "flutter_authorization_status_changed")
         eventChannelAuthorizationStatus.setStreamHandler(locationAuthorizationStatusStreamHandler)
+
+        eventChannelBroadcastState = EventChannel(messenger, "flutter_broadcast_state_changed")
+        eventChannelBroadcastState.setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                broadcastStateSink = events
+                // Current state first, as documented.
+                events.success(beaconBroadcast?.isAdvertising == true)
+            }
+
+            override fun onCancel(arguments: Any?) {
+                broadcastStateSink = null
+            }
+        })
     }
 
     private fun teardownChannels() {
@@ -137,6 +155,7 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
         eventChannelMonitoring.setStreamHandler(null)
         eventChannelBluetoothState.setStreamHandler(null)
         eventChannelAuthorizationStatus.setStreamHandler(null)
+        eventChannelBroadcastState.setStreamHandler(null)
 
         activityPluginBinding = null
     }

@@ -8,6 +8,7 @@
 * Android: `stopBroadcast()` and `isBroadcasting()` no longer require an attached Activity; `startBroadcast()` only needs one to request `BLUETOOTH_ADVERTISE`.
 * Android: `startBroadcast()` rejects a missing or malformed `proximityUUID`, `major`/`minor` outside `0..65535` and `txPower` outside `-128..127` with `Invalid parameter` instead of silently advertising a malformed beacon.
 * Android: `startBroadcast()` fails fast with `BLUETOOTH_OFF` when Bluetooth is disabled and `BROADCAST_NOT_SUPPORTED` when the device cannot advertise.
+* Add `broadcastingStateChanged()`: a stream of broadcasting on/off transitions, emitting the current state first. It also reports when the OS stops advertising because Bluetooth turned off; on Android `isBroadcasting()` now returns `false` in that case instead of the stale AltBeacon state. Platform interface implementations get a default that throws `UnimplementedError`.
 * iOS: `startBroadcast()` no longer hangs when Bluetooth is off, unauthorized or unsupported: it fails with `BLUETOOTH_OFF`, `BLUETOOTH_UNAUTHORIZED` or `BLUETOOTH_UNSUPPORTED`, and times out after 10 seconds (`START_TIMEOUT`) once advertising was requested.
 * iOS: invalid beacon data (malformed UUID, `major`/`minor` outside `0..65535`, missing identifier) returns an error instead of crashing; ranging and monitoring skip such regions instead of crashing.
 * iOS: one `CBPeripheralManager` is reused across starts, a second start while one is pending fails with `ALREADY_STARTING`, and the advertisement stops when the plugin detaches from the engine.

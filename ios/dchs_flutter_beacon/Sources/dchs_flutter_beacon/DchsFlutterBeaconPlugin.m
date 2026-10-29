@@ -7,12 +7,23 @@
 #import "FBMonitoringStreamHandler.h"
 #import "FBAuthorizationStatusHandler.h"
 
+@class DchsFlutterBeaconPlugin;
+
+/// Streams broadcasting on/off transitions to Dart.
+@interface FBBroadcastStateHandler : NSObject<FlutterStreamHandler>
+@property (weak, nonatomic) DchsFlutterBeaconPlugin *plugin;
+@end
+
 @interface DchsFlutterBeaconPlugin() <CLLocationManagerDelegate, CBCentralManagerDelegate, CBPeripheralManagerDelegate>
 
 @property (assign, nonatomic) CLAuthorizationStatus defaultLocationAuthorizationType;
 @property (assign) BOOL shouldStartAdvertise;
 @property (assign) NSUInteger broadcastAttempt;
-@property (assign) NSUInteger pendingAdvertiseCallbacks;
+@property (assign) BOOL advertiseRequestInFlight;
+@property (assign) BOOL advertiseRequestQueued;
+@property (assign) BOOL publishedBroadcastState;
+@property (copy, nonatomic, nullable) FlutterEventSink broadcastStateSink;
+@property (strong, nonatomic) FBBroadcastStateHandler *broadcastStateHandler;
 
 @property (strong, nonatomic) CLLocationManager *locationManager;
 @property (strong, nonatomic) CBCentralManager *bluetoothManager;
@@ -64,6 +75,13 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
     [FlutterEventChannel eventChannelWithName:@"flutter_authorization_status_changed"
                               binaryMessenger:[registrar messenger]];
     [streamChannelAuthorization setStreamHandler:instance.authorizationHandler];
+
+    instance.broadcastStateHandler = [[FBBroadcastStateHandler alloc] init];
+    instance.broadcastStateHandler.plugin = instance;
+    FlutterEventChannel* streamChannelBroadcastState =
+    [FlutterEventChannel eventChannelWithName:@"flutter_broadcast_state_changed"
+                              binaryMessenger:[registrar messenger]];
+    [streamChannelBroadcastState setStreamHandler:instance.broadcastStateHandler];
 }
 
 - (id)init {
@@ -258,6 +276,7 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
         if (self.peripheralManager) {
             [self.peripheralManager stopAdvertising];
         }
+        [self publishBroadcastState];
         result(nil);
         return;
     }
@@ -336,12 +355,14 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
     switch (peripheral.state) {
         case CBManagerStatePoweredOn:
             self.shouldStartAdvertise = NO;
-            if (peripheral.isAdvertising) {
-                [peripheral stopAdvertising];
-            }
-            self.pendingAdvertiseCallbacks++;
-            [peripheral startAdvertising:self.beaconPeripheralData];
             [self scheduleBroadcastStartTimeout];
+            if (self.advertiseRequestInFlight) {
+                // didStartAdvertising carries no request id, so never overlap requests:
+                // the answer to the earlier one issues this request.
+                self.advertiseRequestQueued = YES;
+                break;
+            }
+            [self requestAdvertising:peripheral];
             break;
         case CBManagerStatePoweredOff:
             [self failPendingBroadcastWithMessage:@"BLUETOOTH_OFF"];
@@ -372,14 +393,26 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
         }
         [strongSelf.peripheralManager stopAdvertising];
         // A request that never answered must not swallow the next start's callback.
-        strongSelf.pendingAdvertiseCallbacks = 0;
+        // Treat the unanswered request as dead so later starts are not blocked forever.
+        // Residual risk: Core Bluetooth answering it more than 10 s late after a new start.
+        strongSelf.advertiseRequestInFlight = NO;
         [strongSelf failPendingBroadcastWithMessage:@"START_TIMEOUT"];
+        [strongSelf publishBroadcastState];
     });
 }
 
+- (void) requestAdvertising:(CBPeripheralManager *)peripheral {
+    if (peripheral.isAdvertising) {
+        [peripheral stopAdvertising];
+    }
+    self.advertiseRequestInFlight = YES;
+    [peripheral startAdvertising:self.beaconPeripheralData];
+}
+
 - (void) failPendingBroadcastWithMessage:(NSString *)message {
-    // Any armed start timeout now belongs to no call.
+    // Any armed start timeout and queued request now belong to no call.
     self.broadcastAttempt++;
+    self.advertiseRequestQueued = NO;
     self.shouldStartAdvertise = NO;
     FlutterResult pending = self.flutterBroadcastResult;
     self.flutterBroadcastResult = nil;
@@ -392,6 +425,18 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
     // Nothing can stop the advertisement once this engine is gone.
     [self failPendingBroadcastWithMessage:@"Flutter engine was detached before broadcasting started"];
     [self.peripheralManager stopAdvertising];
+    self.broadcastStateSink = nil;
+}
+
+- (void) publishBroadcastState {
+    BOOL state = self.peripheralManager.isAdvertising;
+    if (state == self.publishedBroadcastState) {
+        return;
+    }
+    self.publishedBroadcastState = state;
+    if (self.broadcastStateSink) {
+        self.broadcastStateSink(@(state));
+    }
 }
 
 ///------------------------------------------------------------
@@ -723,18 +768,30 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
 ///------------------------------------------------------------
 
 - (void)peripheralManagerDidUpdateState:(CBPeripheralManager *)peripheral {
+    // Core Bluetooth stops advertising on its own when it leaves the powered-on state,
+    // and drops any unanswered startAdvertising request with it.
+    if (peripheral.state != CBManagerStatePoweredOn) {
+        self.advertiseRequestInFlight = NO;
+        self.advertiseRequestQueued = NO;
+        [self publishBroadcastState];
+    }
     if (self.shouldStartAdvertise && self.flutterBroadcastResult) {
         [self advertiseWhenPoweredOn:peripheral];
     }
 }
 
 - (void)peripheralManagerDidStartAdvertising:(CBPeripheralManager *)peripheral error:(nullable NSError *)error {
-    // One manager serves every start, so callbacks carry no attempt id: only the
-    // answer to the latest startAdvertising request may settle the pending call.
-    if (self.pendingAdvertiseCallbacks > 0) {
-        self.pendingAdvertiseCallbacks--;
-    }
-    if (self.pendingAdvertiseCallbacks > 0) {
+    self.advertiseRequestInFlight = NO;
+    if (self.advertiseRequestQueued) {
+        // This answers an earlier request: drop it and issue the queued one.
+        self.advertiseRequestQueued = NO;
+        if (!error) {
+            [peripheral stopAdvertising];
+        }
+        [self publishBroadcastState];
+        if (self.flutterBroadcastResult) {
+            [self requestAdvertising:peripheral];
+        }
         return;
     }
 
@@ -753,8 +810,26 @@ static const NSTimeInterval kBroadcastStartTimeout = 10.0;
         // NSError is not encodable by the standard message codec; send its description only.
         pending([FlutterError errorWithCode:@"Broadcast" message:error.localizedDescription details:nil]);
     } else {
+        [self publishBroadcastState];
         pending(@(peripheral.isAdvertising));
     }
+}
+
+@end
+
+@implementation FBBroadcastStateHandler
+
+- (FlutterError * _Nullable)onListenWithArguments:(id _Nullable)arguments
+                                       eventSink:(FlutterEventSink)events {
+    DchsFlutterBeaconPlugin *plugin = self.plugin;
+    plugin.broadcastStateSink = events;
+    events(@(plugin.peripheralManager.isAdvertising));
+    return nil;
+}
+
+- (FlutterError * _Nullable)onCancelWithArguments:(id _Nullable)arguments {
+    self.plugin.broadcastStateSink = nil;
+    return nil;
 }
 
 @end

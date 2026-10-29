@@ -21,9 +21,12 @@ class MethodChannelDchsFlutterBeacon extends DchsFlutterBeaconPlatform {
       EventChannel('flutter_bluetooth_state_changed');
   static const EventChannel _authorizationStatusChangedChannel =
       EventChannel('flutter_authorization_status_changed');
+  static const EventChannel _broadcastingStateChangedChannel =
+      EventChannel('flutter_broadcast_state_changed');
 
   Stream<BluetoothState>? _onBluetoothState;
   Stream<AuthorizationStatus>? _onAuthorizationStatus;
+  Stream<bool>? _onBroadcastingState;
 
   @override
   Future<bool> initializeScanning() async {
@@ -153,6 +156,14 @@ class MethodChannelDchsFlutterBeacon extends DchsFlutterBeaconPlatform {
         .receiveBroadcastStream()
         .map((dynamic event) => BluetoothState.parse(event));
     return _onBluetoothState!;
+  }
+
+  @override
+  Stream<bool> broadcastingStateChanged() {
+    _onBroadcastingState ??= _broadcastingStateChangedChannel
+        .receiveBroadcastStream()
+        .map((dynamic event) => event == true);
+    return _onBroadcastingState!;
   }
 
   @override

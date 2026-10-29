@@ -75,4 +75,10 @@ class DchsFlutterBeacon {
   Future<void> stopBroadcast() => _platform.stopBroadcast();
   Future<bool> isBroadcasting() => _platform.isBroadcasting();
   Future<bool> isBroadcastSupported() => _platform.isBroadcastSupported();
+
+  /// Emits `true` when broadcasting starts and `false` when it stops,
+  /// including when the OS stops it (for example, Bluetooth turned off).
+  /// The current state is emitted first on listen.
+  Stream<bool> broadcastingStateChanged() =>
+      _platform.broadcastingStateChanged();
 }

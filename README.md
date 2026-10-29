@@ -265,6 +265,16 @@ await flutterBeacon.stopBroadcast();
 On Android, `advertisingMode` defaults to `AdvertisingMode.high` (shortest advertising
 interval, fastest detection). Pass `AdvertisingMode.low` to save battery.
 
+Listen to `broadcastingStateChanged()` to know when broadcasting really starts or stops,
+including when the OS stops it because Bluetooth was turned off. The current state is
+emitted first:
+
+```dart
+final subscription = flutterBeacon.broadcastingStateChanged().listen((isBroadcasting) {
+  // update UI
+});
+```
+
 ## Under the hood
 
 * iOS uses native Framework [CoreLocation](https://developer.apple.com/documentation/corelocation/)
