@@ -36,6 +36,7 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
     private lateinit var eventChannelBluetoothState: EventChannel
     private lateinit var eventChannelAuthorizationStatus: EventChannel
     private lateinit var eventChannelBroadcastState: EventChannel
+    private var broadcastStateSink: EventChannel.EventSink? = null
 
     private var beaconManager: BeaconManager? = null
     private var beaconScanner: FlutterBeaconScanner? = null
@@ -111,7 +112,10 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
         }
 
         platform = FlutterPlatform(appContext, activity)
-        beaconBroadcast = FlutterBeaconBroadcast(appContext, iBeaconLayout)
+        beaconBroadcast = FlutterBeaconBroadcast(appContext, iBeaconLayout).also { broadcast ->
+            // Forward through the plugin so a subscription never depends on which instance existed at listen time.
+            broadcast.stateListener = { broadcastStateSink?.success(it) }
+        }
         beaconScanner = FlutterBeaconScanner(this, appContext)
         channel = MethodChannel(messenger, "flutter_beacon")
         channel.setMethodCallHandler(this)
@@ -131,18 +135,13 @@ class DchsFlutterBeaconPlugin : FlutterPlugin, ActivityAware, MethodChannel.Meth
         eventChannelBroadcastState = EventChannel(messenger, "flutter_broadcast_state_changed")
         eventChannelBroadcastState.setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
-                val broadcast = beaconBroadcast
-                if (broadcast == null) {
-                    // Keep the documented "current state first" contract.
-                    events.success(false)
-                    return
-                }
-                broadcast.stateListener = { events.success(it) }
-                events.success(broadcast.isAdvertising)
+                broadcastStateSink = events
+                // Current state first, as documented.
+                events.success(beaconBroadcast?.isAdvertising == true)
             }
 
             override fun onCancel(arguments: Any?) {
-                beaconBroadcast?.stateListener = null
+                broadcastStateSink = null
             }
         })
     }
