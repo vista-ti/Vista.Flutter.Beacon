@@ -136,12 +136,20 @@ class FlutterBeaconBroadcast internal constructor(
             return
         }
 
+        val start = try {
+            PendingStart(
+                FlutterBeaconUtils.beaconFromMap(arguments),
+                arguments["advertisingMode"] as? Int,
+                arguments["advertisingTxPowerLevel"] as? Int,
+            )
+        } catch (e: IllegalArgumentException) {
+            // Malformed identifiers (e.g. UUID) must not leave a pending start behind.
+            result.error("Broadcast", "Invalid parameter", null)
+            return
+        }
+
         pendingResult = result
-        pendingStart = PendingStart(
-            FlutterBeaconUtils.beaconFromMap(arguments),
-            arguments["advertisingMode"] as? Int,
-            arguments["advertisingTxPowerLevel"] as? Int,
-        )
+        pendingStart = start
 
         if (needsAdvertisePermission()) {
             val requestPermission = permissionRequester
@@ -227,6 +235,8 @@ class FlutterBeaconBroadcast internal constructor(
     }
 
     private fun takePendingResult(): MethodChannel.Result? {
+        // Any radio answer still in flight now belongs to no call.
+        attempt++
         cancelTimeout?.invoke()
         cancelTimeout = null
         awaitingPermission = false

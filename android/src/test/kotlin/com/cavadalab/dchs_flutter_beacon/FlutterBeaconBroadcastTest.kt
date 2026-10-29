@@ -48,25 +48,31 @@ internal class FlutterBeaconBroadcastTest {
         fun fail(code: Int) = created.last().callback!!.invoke(code)
     }
 
+    /** Throws on a second reply, like Flutter's DartMessenger reply. */
     private class RecordingResult : MethodChannel.Result {
         var successValue: Any? = null
         var succeeded = false
         var errorMessage: String? = null
         var calls = 0
 
-        override fun success(result: Any?) {
+        private fun reply() {
+            check(calls == 0) { "Reply already submitted" }
             calls++
+        }
+
+        override fun success(result: Any?) {
+            reply()
             succeeded = true
             successValue = result
         }
 
         override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
-            calls++
+            reply()
             this.errorMessage = errorMessage
         }
 
         override fun notImplemented() {
-            calls++
+            reply()
         }
     }
 
@@ -299,6 +305,86 @@ internal class FlutterBeaconBroadcastTest {
         assertTrue(second.succeeded)
         assertEquals(1, advertiser.liveCount, "only the second attempt may stay on air")
         assertTrue(advertiser.created[1].isStarted)
+    }
+
+    // Verifier advisories A1/A2 and uncovered paths
+
+    @Test
+    fun malformedUuid_isRejectedWithoutWedgingLaterCalls() {
+        val bad = RecordingResult()
+        broadcast.startBroadcast(args + ("proximityUUID" to "not-a-uuid"), bad)
+
+        assertEquals("Invalid parameter", bad.errorMessage)
+        assertEquals(0, advertiser.startCalls)
+
+        val next = RecordingResult()
+        broadcast.startBroadcast(args, next)
+        advertiser.succeed()
+        assertTrue(next.succeeded)
+
+        val stop = RecordingResult()
+        broadcast.stopBroadcast(stop)
+        assertEquals(true, stop.successValue)
+        assertFalse(advertiser.isStarted)
+    }
+
+    @Test
+    fun lateSuccessOfStoppedAttempt_isNotCreditedToStartAwaitingPermission() {
+        broadcast.startBroadcast(args, RecordingResult())
+        broadcast.stopBroadcast(RecordingResult())
+
+        needsPermission = true
+        val waiting = RecordingResult()
+        broadcast.startBroadcast(args + ("major" to 9), waiting)
+
+        advertiser.succeed(index = 0)
+
+        assertEquals(0, waiting.calls, "must keep waiting for the permission result")
+        assertFalse(advertiser.isStarted, "stopped attempt must not stay on air")
+
+        broadcast.onAdvertisePermissionResult(granted = true)
+        advertiser.succeed()
+        assertTrue(waiting.succeeded)
+        assertEquals("9", advertiser.lastBeacon!!.id2.toString())
+    }
+
+    @Test
+    fun permissionResultAfterActivityDetach_isIgnored() {
+        needsPermission = true
+        val result = RecordingResult()
+        broadcast.startBroadcast(args, result)
+        broadcast.onActivityDetached()
+
+        broadcast.onAdvertisePermissionResult(granted = true)
+
+        assertEquals(1, result.calls)
+        assertEquals(0, advertiser.startCalls)
+    }
+
+    @Test
+    fun disposeWhileAwaitingPermission_failsOnceAndIgnoresLaterGrant() {
+        needsPermission = true
+        val result = RecordingResult()
+        broadcast.startBroadcast(args, result)
+
+        broadcast.dispose()
+        broadcast.onAdvertisePermissionResult(granted = true)
+
+        assertEquals(1, result.calls)
+        assertEquals(0, advertiser.startCalls)
+    }
+
+    @Test
+    fun failedRestart_leavesNothingOnAir() {
+        broadcast.startBroadcast(args, RecordingResult())
+        advertiser.succeed()
+
+        val restart = RecordingResult()
+        broadcast.startBroadcast(args, restart)
+        advertiser.fail(3)
+
+        assertEquals("ALREADY_STARTED", restart.errorMessage)
+        assertEquals(0, advertiser.liveCount)
     }
 
     @Test
